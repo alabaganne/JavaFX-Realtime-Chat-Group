@@ -36,3 +36,15 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+### Application Specific ###
+# Local configuration overrides
+application-local.properties
+# Logs
+logs/
+*.log
+*.log.*
+# Database files (don't commit local databases)
+*.db
+*.sqlite
+*.sqlite3
