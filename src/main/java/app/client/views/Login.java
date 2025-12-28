@@ -1,20 +1,26 @@
 package app.client.views;
 
 import app.client.Client;
-import app.client.db.MyConnection;
+import app.client.db.DatabaseManager;
 import app.types.User;
+import app.util.PasswordUtil;
+import app.util.ValidationUtil;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.layout.GridPane;
 import javafx.stage.Stage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 
 public class Login {
+    private static final Logger logger = LoggerFactory.getLogger(Login.class);
     private Stage window;
     public static Scene scene;
     public GridPane root;
@@ -25,62 +31,106 @@ public class Login {
     public Login(Stage primaryStage) {
         this.window = primaryStage;
 
+        // Main container with card styling
         root = new GridPane();
-        root.setVgap(10);
-        root.setHgap(10);
+        root.getStyleClass().add("login-container");
+        root.setVgap(16);
+        root.setHgap(12);
         root.setAlignment(Pos.CENTER);
-        root.setPadding(new Insets(15));
+        root.setPadding(new Insets(40));
+        root.setMaxWidth(450);
 
-        Label emailLabel = new Label("Email Address:");
-        root.add(emailLabel, 0, 0, 1, 1);
-        root.add(emailTextField, 1, 0, 2, 1);
+        // Header
+        javafx.scene.text.Text header = new javafx.scene.text.Text("Welcome Back");
+        header.getStyleClass().add("login-header");
+        root.add(header, 0, 0, 2, 1);
 
-        Label passwordLabel = new Label("Password:");
-        root.add(passwordLabel,0, 1, 1, 1);
-        root.add(passwordField, 1, 1, 2, 1);
+        javafx.scene.text.Text subtitle = new javafx.scene.text.Text("Sign in to continue to your account");
+        subtitle.getStyleClass().add("login-subtitle");
+        root.add(subtitle, 0, 1, 2, 1);
 
-        root.add(loginButton, 0, 2, 1, 1);
-        loginButton.setOnAction(e -> {
-            this.handleLogin();
-        });
+        // Email field
+        Label emailLabel = new Label("Email Address");
+        root.add(emailLabel, 0, 2, 2, 1);
+        emailTextField.setPromptText("Enter your email");
+        emailTextField.setPrefWidth(350);
+        root.add(emailTextField, 0, 3, 2, 1);
 
-        Hyperlink registerLink = new Hyperlink("Create an account");
-        registerLink.setOnAction(e -> {
-            primaryStage.setScene(Register.scene);
-        });
-        root.add(registerLink, 0, 3);
+        // Password field
+        Label passwordLabel = new Label("Password");
+        root.add(passwordLabel, 0, 4, 2, 1);
+        passwordField.setPromptText("Enter your password");
+        passwordField.setPrefWidth(350);
+        root.add(passwordField, 0, 5, 2, 1);
 
-        scene = new Scene(root);
+        // Login button
+        loginButton.setPrefWidth(350);
+        loginButton.setPrefHeight(45);
+        loginButton.setOnAction(e -> this.handleLogin());
+        root.add(loginButton, 0, 6, 2, 1);
+
+        // Register link
+        Hyperlink registerLink = new Hyperlink("Don't have an account? Sign up");
+        registerLink.setOnAction(e -> primaryStage.setScene(Register.scene));
+        registerLink.setAlignment(Pos.CENTER);
+        root.add(registerLink, 0, 7, 2, 1);
+        GridPane.setHalignment(registerLink, javafx.geometry.HPos.CENTER);
+
+        scene = new Scene(root, 600, 700);
+
+        // Load CSS stylesheet
+        String css = Login.class.getResource("/styles/main.css").toExternalForm();
+        scene.getStylesheets().add(css);
     }
 
     private void handleLogin() {
-        // get user from the db
-        String sql = "select * from users " +
-                "where email = '" + emailTextField.getText() + "' " +
-                "and password = '" + passwordField.getText() + "' " +
-                "limit 1";
-        try {
-            Statement s = MyConnection.con.createStatement();
-            ResultSet rs = s.executeQuery(sql);
+        String email = emailTextField.getText();
+        String password = passwordField.getText();
 
-            if(!rs.isBeforeFirst()) {
-                Alert alert = new Alert(Alert.AlertType.ERROR);
-                alert.setContentText("Wrong credentials!");
-                alert.show();
+        // Validate input
+        ValidationUtil.ValidationResult validation = ValidationUtil.validateLogin(email, password);
+        if (!validation.isValid()) {
+            showError(validation.getMessage());
+            return;
+        }
+
+        // Query user from database using PreparedStatement (prevents SQL injection)
+        String sql = "SELECT id, name, email, password, role FROM users WHERE email = ? LIMIT 1";
+
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, email.trim());
+            ResultSet rs = ps.executeQuery();
+
+            if (!rs.next()) {
+                showError("Invalid email or password");
+                logger.warn("Login attempt failed for email: {}", email);
                 return;
             }
 
-            rs.next();
+            String storedPasswordHash = rs.getString("password");
 
+            // Verify password using BCrypt
+            if (!PasswordUtil.verifyPassword(password, storedPasswordHash)) {
+                showError("Invalid email or password");
+                logger.warn("Invalid password attempt for email: {}", email);
+                return;
+            }
+
+            // Successfully authenticated
             Client.currentUser = new User(
                     rs.getInt("id"),
                     rs.getString("name"),
                     rs.getString("email"),
-                    rs.getString("password"),
+                    storedPasswordHash,
                     rs.getString("role")
             );
 
-            if(Client.currentUser.role.equals("admin")) {
+            logger.info("User logged in successfully: {}", email);
+
+            // Navigate to appropriate screen based on role
+            if ("admin".equals(Client.currentUser.getRole())) {
                 new ManageUsers(window);
                 window.setScene(ManageUsers.scene);
             } else {
@@ -89,7 +139,19 @@ public class Login {
             }
 
         } catch (SQLException e) {
-            throw new RuntimeException(e);
+            logger.error("Database error during login", e);
+            showError("An error occurred during login. Please try again.");
         }
+    }
+
+    /**
+     * Shows an error alert to the user
+     */
+    private void showError(String message) {
+        Alert alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle("Login Error");
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
     }
 }

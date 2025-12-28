@@ -1,12 +1,29 @@
 package app.types;
 
+/**
+ * User model representing a system user
+ * Encapsulates user data with proper getter/setter methods
+ */
 public class User {
-    public int id;
-    public String name;
-    public String email;
-    public String password;
-    public String role;
+    private int id;
+    private String name;
+    private String email;
+    private String password; // Stores hashed password
+    private String role;
 
+    /**
+     * Default constructor for JavaFX TableView
+     */
+    public User() {}
+
+    /**
+     * Full constructor
+     * @param id User ID
+     * @param name User's full name
+     * @param email User's email address
+     * @param password User's hashed password
+     * @param role User's role (admin or user)
+     */
     public User(int id, String name, String email, String password, String role) {
         this.id = id;
         this.name = name;
@@ -14,6 +31,8 @@ public class User {
         this.password = password;
         this.role = role;
     }
+
+    // Getters and Setters
 
     public int getId() {
         return id;
@@ -55,5 +74,21 @@ public class User {
         this.role = role;
     }
 
-    public User() {}
+    /**
+     * Checks if user has admin role
+     * @return true if user is admin
+     */
+    public boolean isAdmin() {
+        return "admin".equalsIgnoreCase(role);
+    }
+
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", email='" + email + '\'' +
+                ", role='" + role + '\'' +
+                '}';
+    }
 }

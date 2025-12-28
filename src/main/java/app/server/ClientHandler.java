@@ -1,132 +1,202 @@
 package app.server;
-// 1. Open a socket.
-// 2. Open an input stream and output stream to the socket.
-// 3. Read from and write to the stream according to the server's protocol.
-// 4. Close the streams.
-// 5. Close the socket.
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
- * When a client connects the server spawns a thread to handle the client.
- * This way the server can handle multiple clients at the same time.
- *
- * This keyword should be used in setters, passing the object as an argument,
- * and to call alternate constructors (a constructor with a different set of
- * arguments.
+ * Handles client connections in separate threads
+ * Each ClientHandler manages communication with one connected client
+ * Thread-safe implementation using CopyOnWriteArrayList for concurrent access
  */
-
-// Runnable is implemented on a class whose instances will be executed by a thread.
 public class ClientHandler implements Runnable {
+    private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
 
-    // Array list of all the threads handling clients so each message can be sent to the client the thread is handling.
-    public static ArrayList<ClientHandler> clientHandlers = new ArrayList<>();
-    // Id that will increment with each new client.
+    // Thread-safe list of all active client handlers for broadcasting messages
+    private static final List<ClientHandler> clientHandlers = new CopyOnWriteArrayList<>();
 
-    // Socket for a connection, buffer reader and writer for receiving and sending data respectively.
-    private Socket socket;
+    // Socket and I/O streams for client communication
+    private final Socket socket;
     private BufferedReader bufferedReader;
     private BufferedWriter bufferedWriter;
     private String clientUsername;
 
-    // Creating the client handler from the socket the server passes.
+    /**
+     * Creates a new client handler for the given socket
+     * @param socket The client socket connection
+     */
     public ClientHandler(Socket socket) {
+        this.socket = socket;
         try {
-            this.socket = socket;
             this.bufferedReader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            this.bufferedWriter= new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+            this.bufferedWriter = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
 
+            // Read client username (first message sent by client)
             this.clientUsername = bufferedReader.readLine();
 
+            if (clientUsername == null || clientUsername.trim().isEmpty()) {
+                logger.warn("Client connected without username");
+                closeEverything(socket, bufferedReader, bufferedWriter);
+                return;
+            }
+
             clientHandlers.add(this);
+            logger.info("User '{}' joined the chat. Total users: {}", clientUsername, clientHandlers.size());
             broadcastMessage(clientUsername + " has entered the chat!");
+
         } catch (IOException e) {
-            // Close everything more gracefully.
+            logger.error("Error initializing client handler", e);
             closeEverything(socket, bufferedReader, bufferedWriter);
         }
     }
 
-    // Everything in this method is run on a separate thread. We want to listen for messages
-    // on a separate thread because listening (bufferedReader.readLine()) is a blocking operation.
-    // A blocking operation means the caller waits for the callee to finish its operation.
+    /**
+     * Main thread execution method
+     * Listens for messages from the client and broadcasts them
+     * Runs until the client disconnects
+     */
     @Override
     public void run() {
         String messageFromClient;
-        // Continue to listen for messages while a connection with the client is still established.
-        while (socket.isConnected()) {
-            try {
-                // Read what the client sent and then send it to every other client.
-                messageFromClient = bufferedReader.readLine();
-                broadcastMessage(messageFromClient);
-            } catch (IOException e) {
-                // Close everything gracefully.
-                closeEverything(socket, bufferedReader, bufferedWriter);
-                break;
-            }
-        }
-    }
 
-    // Send data to current client
-    public void sendData(String data) {
         try {
-            bufferedWriter.write(data);
-            bufferedWriter.newLine();
-            bufferedWriter.flush();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+            // Continue listening for messages while connection is active
+            while (socket.isConnected() && !socket.isClosed()) {
+                try {
+                    messageFromClient = bufferedReader.readLine();
+
+                    // Client disconnected gracefully
+                    if (messageFromClient == null) {
+                        logger.info("Client '{}' disconnected", clientUsername);
+                        break;
+                    }
+
+                    logger.debug("Message from '{}': {}", clientUsername, messageFromClient);
+                    broadcastMessage(messageFromClient);
+
+                } catch (IOException e) {
+                    logger.warn("Error reading message from client '{}'", clientUsername, e);
+                    break;
+                }
+            }
+        } finally {
+            closeEverything(socket, bufferedReader, bufferedWriter);
         }
     }
 
-    // Send a message through each client handler thread so that everyone gets the message.
-    // Basically each client handler is a connection to a client. So for any message that
-    // is received, loop through each connection and send it down it.
+    /**
+     * Sends data to this specific client
+     * @param data The data to send
+     */
+    public synchronized void sendData(String data) {
+        try {
+            if (bufferedWriter != null && socket.isConnected()) {
+                bufferedWriter.write(data);
+                bufferedWriter.newLine();
+                bufferedWriter.flush();
+            }
+        } catch (IOException e) {
+            logger.error("Error sending data to client '{}'", clientUsername, e);
+            closeEverything(socket, bufferedReader, bufferedWriter);
+        }
+    }
+
+    /**
+     * Broadcasts a message to all connected clients except the sender
+     * @param messageToSend The message to broadcast
+     */
     public void broadcastMessage(String messageToSend) {
+        if (messageToSend == null || messageToSend.trim().isEmpty()) {
+            return;
+        }
+
+        logger.debug("Broadcasting message: {}", messageToSend);
+
         for (ClientHandler clientHandler : clientHandlers) {
             try {
-                // You don't want to broadcast the message to the user who sent it.
-                if (!clientHandler.clientUsername.equals(clientUsername)) {
-                    clientHandler.bufferedWriter.write(messageToSend);
-                    clientHandler.bufferedWriter.newLine();
-                    clientHandler.bufferedWriter.flush();
+                // Don't send the message back to the sender
+                if (!clientHandler.clientUsername.equals(this.clientUsername)) {
+                    synchronized (clientHandler) {
+                        if (clientHandler.bufferedWriter != null && clientHandler.socket.isConnected()) {
+                            clientHandler.bufferedWriter.write(messageToSend);
+                            clientHandler.bufferedWriter.newLine();
+                            clientHandler.bufferedWriter.flush();
+                        }
+                    }
                 }
             } catch (IOException e) {
-                // Gracefully close everything.
-                closeEverything(socket, bufferedReader, bufferedWriter);
+                logger.error("Error broadcasting to client '{}'", clientHandler.clientUsername, e);
+                clientHandler.closeEverything(clientHandler.socket, clientHandler.bufferedReader, clientHandler.bufferedWriter);
             }
         }
     }
 
-    // If the client disconnects for any reason remove them from the list so a message isn't sent down a broken connection.
-    public void removeClientHandler() {
-        clientHandlers.remove(this);
-        broadcastMessage(clientUsername + " has left the chat!");
+    /**
+     * Removes this client handler from the active list
+     * Notifies other clients that this user has left
+     */
+    private void removeClientHandler() {
+        boolean removed = clientHandlers.remove(this);
+        if (removed && clientUsername != null) {
+            logger.info("User '{}' left the chat. Remaining users: {}", clientUsername, clientHandlers.size());
+            broadcastMessage(clientUsername + " has left the chat!");
+        }
     }
 
-    // Helper method to close everything so you don't have to repeat yourself.
-    public void closeEverything(Socket socket, BufferedReader bufferedReader, BufferedWriter bufferedWriter) {
-        // Note you only need to close the outer wrapper as the underlying streams are closed when you close the wrapper.
-        // Note you want to close the outermost wrapper so that everything gets flushed.
-        // Note that closing a socket will also close the socket's InputStream and OutputStream.
-        // Closing the input stream closes the socket. You need to use shutdownInput() on socket to just close the input stream.
-        // Closing the socket will also close the socket's input stream and output stream.
-        // Close the socket after closing the streams.
-
-        // The client disconnected or an error occurred so remove them from the list so no message is broadcasted.
+    /**
+     * Closes all resources gracefully
+     * @param socket The socket to close
+     * @param bufferedReader The reader to close
+     * @param bufferedWriter The writer to close
+     */
+    private void closeEverything(Socket socket, BufferedReader bufferedReader, BufferedWriter bufferedWriter) {
         removeClientHandler();
+
         try {
             if (bufferedReader != null) {
                 bufferedReader.close();
             }
+        } catch (IOException e) {
+            logger.error("Error closing buffered reader", e);
+        }
+
+        try {
             if (bufferedWriter != null) {
                 bufferedWriter.close();
             }
-            if (socket != null) {
+        } catch (IOException e) {
+            logger.error("Error closing buffered writer", e);
+        }
+
+        try {
+            if (socket != null && !socket.isClosed()) {
                 socket.close();
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            logger.error("Error closing socket", e);
         }
+
+        logger.debug("All resources closed for client '{}'", clientUsername);
+    }
+
+    /**
+     * Gets the current number of connected clients
+     * @return Number of active client handlers
+     */
+    public static int getClientCount() {
+        return clientHandlers.size();
+    }
+
+    /**
+     * Gets the username of this client
+     * @return Client username
+     */
+    public String getClientUsername() {
+        return clientUsername;
     }
 }
