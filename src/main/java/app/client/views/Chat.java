@@ -6,6 +6,7 @@ import app.config.Config;
 import app.types.Message;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -62,18 +63,30 @@ public class Chat {
         this.window = primaryStage;
 
         // Create modern chat header
-        VBox headerBox = new VBox();
+        HBox headerBox = new HBox();
         headerBox.getStyleClass().add("chat-header");
         headerBox.setPadding(new Insets(20));
         headerBox.setAlignment(Pos.CENTER_LEFT);
 
-        javafx.scene.text.Text chatTitle = new javafx.scene.text.Text("💬 Group Chat");
-        chatTitle.getStyleClass().add("chat-title");
+        // Left side: title and user info
+        VBox headerLeft = new VBox(4);
+        headerLeft.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(headerLeft, Priority.ALWAYS);
+
+        javafx.scene.text.Text chatTitle = new javafx.scene.text.Text("Group Chat");
+        chatTitle.setStyle("-fx-fill: white; -fx-font-size: 20px; -fx-font-weight: bold;");
 
         javafx.scene.text.Text userInfo = new javafx.scene.text.Text("Logged in as: " + Client.currentUser.getName());
         userInfo.setStyle("-fx-fill: #e0e7ff; -fx-font-size: 13px;");
 
-        headerBox.getChildren().addAll(chatTitle, userInfo);
+        headerLeft.getChildren().addAll(chatTitle, userInfo);
+
+        // Right side: sign out button
+        Button signOutButton = new Button("Sign Out");
+        signOutButton.setStyle("-fx-background-color: rgba(255,255,255,0.2); -fx-text-fill: white; -fx-background-radius: 8; -fx-padding: 8 16; -fx-cursor: hand;");
+        signOutButton.setOnAction(e -> this.logout());
+
+        headerBox.getChildren().addAll(headerLeft, signOutButton);
 
         // Messages scroll pane
         ScrollPane scrollPane = new ScrollPane();
@@ -112,9 +125,7 @@ public class Chat {
         messageField.setOnAction(e -> this.sendMessage());
 
         Button sendButton = new Button("Send");
-        sendButton.getStyleClass().add("send-button");
-        sendButton.setPrefHeight(40);
-        sendButton.setPrefWidth(80);
+        sendButton.setStyle("-fx-background-color: #6366f1; -fx-text-fill: white; -fx-font-size: 14px; -fx-font-weight: bold; -fx-background-radius: 8; -fx-padding: 12 24; -fx-cursor: hand;");
         sendButton.setOnAction(e -> this.sendMessage());
 
         inputBox.getChildren().addAll(messageField, sendButton);
